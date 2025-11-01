@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard MQTT - IFG</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+    /* Variáveis CSS para gerenciamento de cores */
+    :root {
+        --cor-fundo-principal: #0d1117;
+        --cor-fundo-card: #161b22; /* Um pouco mais claro que o fundo */
+        --cor-texto-principal: #e6edf3;
+        --cor-acento-principal: #00e0ff; /* Ciano/Azul claro */
+        --cor-acento-secundario: #00ff88; /* Verde/Ciano */
+        --sombra-card: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 224, 255, 0.15);
+    }
+
+    body {
+        background-color: var(--cor-fundo-principal);
+        color: var(--cor-texto-principal);
+        font-family: 'Poppins', sans-serif;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        overflow-x: hidden;
+    }
+
+    /* Layout principal para centralizar e limitar a largura */
+    .main-container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+
+    /* --- Título Principal --- */
+    h1 {
+        color: var(--cor-acento-principal);
+        text-align: center;
+        padding-top: 40px;
+        margin-bottom: 20px;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+
+    /* --- Painel Fixo de Sensores --- */
+    #sensor-panel {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background-color: var(--cor-fundo-card);
+        border: 1px solid var(--cor-acento-principal);
+        border-radius: 12px;
+        padding: 15px 25px;
+        box-shadow: var(--sombra-card);
+        z-index: 1000;
+        text-align: left;
+        display: flex; /* Usar flexbox para alinhar os valores */
+        flex-direction: column;
+    }
+
+    #sensor-panel .label {
+        color: #94a3b8; /* Cor de rótulo mais suave */
+        font-size: 14px;
+        margin-top: 5px;
+    }
+
+    #sensor-panel div.value {
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--cor-acento-secundario); /* Destaque para os valores */
+        margin-bottom: 5px;
+    }
+
+    /* --- Status de Conexão --- */
+    #status {
+        text-align: center;
+        margin: 10px 0 30px 0;
+        font-size: 1.1em;
+        padding: 8px;
+        border-radius: 6px;
+        background-color: rgba(0, 255, 136, 0.1); /* Fundo sutil */
+        color: var(--cor-acento-secundario);
+        font-weight: 400;
+        width: fit-content;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    /* --- Layout Principal para Gráfico e Imagens --- */
+    .dashboard-content {
+        display: flex;
+        flex-direction: column;
+        gap: 30px;
+        margin-top: 30px;
+    }
+
+    /* --- Gráfico --- */
+    .chart-container {
+        background-color: var(--cor-fundo-card);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: var(--sombra-card);
+        max-width: 95%;
+        margin: 0 auto;
+        min-height: 400px; /* Garante que o gráfico tenha altura mínima */
+    }
+
+    canvas {
+        max-width: 100% !important;
+        height: auto !important;
+    }
+
+    /* --- Imagens Recebidas --- */
+    h2 {
+        text-align: center;
+        color: var(--cor-acento-principal);
+        font-weight: 600;
+        margin: 40px 0 20px 0;
+        border-bottom: 2px solid rgba(0, 224, 255, 0.3);
+        padding-bottom: 10px;
+    }
+
+    #images {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); /* Imagens maiores */
+        gap: 25px;
+        padding: 20px;
+    }
+
+    .image-card {
+        background-color: var(--cor-fundo-card);
+        border-radius: 12px;
+        padding: 15px;
+        text-align: center;
+        box-shadow: 0 0 10px rgba(0, 224, 255, 0.2);
+        transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+        border: 1px solid transparent;
+    }
+
+    .image-card:hover {
+        transform: translateY(-5px); /* Efeito de elevação */
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 20px var(--cor-acento-principal);
+        border: 1px solid var(--cor-acento-principal);
+    }
+
+    .image-card img {
+        width: 100%;
+        height: auto;
+        max-height: 200px; /* Limitar altura para uniformidade */
+        border-radius: 8px;
+        object-fit: cover;
+        margin-bottom: 10px;
+    }
+
+    .image-card .filename {
+        color: #aaa;
+        font-size: 0.9em;
+        word-break: break-all;
+    }
+</style>
+</head>
+
+<body>
+    <div id="sensor-panel">
+        <div class="label">Temperatura:</div>
+        <div id="temp" class="value">-- °C</div>
+        <div class="label">Umidade:</div>
+        <div id="umid" class="value">-- %</div>
+    </div>
+
+    <div class="main-container">
+        <h1>📡 Dashboard MQTT - IFG</h1>
+        <div id="status">Conectando ao broker...</div>
+
+        <div class="dashboard-content">
+            <div class="chart-container">
+                <canvas id="chart"></canvas>
+            </div>
+
+            <h2 class="section-title">📸 Imagens Recebidas</h2>
+            <div id="images"></div>
+        </div>
+    </div>
+
+<script>
+const brokerUrl = "wss://test.mosquitto.org:8081/mqtt";
+const topicImages = "ifg1/imagens";
+const topicSensor = "ifg/sensores/temperatura_umidade";
+
+const client = mqtt.connect(brokerUrl);
+const statusEl = document.getElementById("status");
+const tempEl = document.getElementById("temp");
+const umidEl = document.getElementById("umid");
+const imagesDiv = document.getElementById("images");
+
+// buffers das imagens
+const buffers = {};
+const expectedCounts = {};
+const filenames = {};
+
+// dados do gráfico
+const labels = [];
+const tempData = [];
+const umidData = [];
+
+// Gráfico Chart.js
+const ctx = document.getElementById("chart").getContext("2d");
+const chart = new Chart(ctx, {
+    type: "line",
+    data: {
+        labels: labels,
+        datasets: [
+            // DataSet 1: Temperatura (Ciano)
+            { 
+                label: "Temperatura (°C)", 
+                data: tempData, 
+                borderWidth: 2, 
+                borderColor: "#00e0ff", // Cor Ciano
+                tension: 0.4, 
+                fill: false, 
+                pointRadius: 4 
+            },
+            // DataSet 2: Umidade (Verde)
+            { 
+                label: "Umidade (%)", 
+                data: umidData, 
+                borderWidth: 2, 
+                borderColor: "#00ff88", // Cor Verde
+                tension: 0.4, 
+                fill: false, 
+                pointRadius: 4 
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { 
+            legend: { 
+                labels: { 
+                    color: "#fff",
+                    font: { family: 'Poppins' }
+                } 
+            },
+            title: {
+                display: true,
+                text: 'Dados de Sensores em Tempo Real (Temperatura e Umidade)',
+                color: '#e6edf3',
+                font: { size: 18, family: 'Poppins' }
+            }
+        },
+        scales: {
+            x: { 
+                ticks: { color: "#94a3b8" },
+                grid: { color: 'rgba(255, 255, 255, 0.1)' }
+            },
+            y: { 
+                ticks: { color: "#94a3b8" },
+                grid: { color: 'rgba(255, 255, 255, 0.1)' }
+            }
+        }
+    }
+});
+
+client.on("connect", () => {
+    statusEl.textContent = "✅ Conectado ao broker MQTT";
+    client.subscribe(topicImages, { qos: 1 });
+    client.subscribe(topicSensor, { qos: 1 });
+    console.log("Inscrito em:", topicImages, topicSensor);
+});
+
+client.on("message", (topic, message) => {
+    try {
+        const data = JSON.parse(message.toString());
+
+        if (topic === topicImages) {
+            const { image_id, seq, total, filename, data_b64 } = data;
+            if (!buffers[image_id]) {
+                buffers[image_id] = {};
+                expectedCounts[image_id] = total;
+                filenames[image_id] = filename;
+            }
+            buffers[image_id][seq] = data_b64;
+            if (Object.keys(buffers[image_id]).length === total) {
+                reconstructImage(image_id);
+            }
+        }
+
+        if (topic === topicSensor) {
+            const { temperatura, umidade, timestamp } = data;
+            tempEl.textContent = `${temperatura.toFixed(1)} °C`;
+            umidEl.textContent = `${umidade.toFixed(1)} %`;
+
+            // atualizar gráfico
+            const timeLabel = new Date(timestamp * 1000).toLocaleTimeString();
+            labels.push(timeLabel);
+            tempData.push(temperatura); // Adiciona temperatura
+            umidData.push(umidade); // Adiciona umidade
+            
+            if (labels.length > 20) {
+                labels.shift();
+                tempData.shift();
+                umidData.shift();
+            }
+            chart.update(); // Atualiza o gráfico com os novos dados
+        }
+    } catch (err) {
+        console.error("Erro:", err);
+    }
+});
+
+function reconstructImage(image_id) {
+    const total = expectedCounts[image_id];
+    const chunks = buffers[image_id];
+    const filename = filenames[image_id] || `${image_id}.png`;
+
+    const fullBase64 = Object.keys(chunks)
+        .sort((a, b) => a - b)
+        .map(k => chunks[k])
+        .join("");
+
+    const binary = atob(fullBase64);
+    const array = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+
+    const blob = new Blob([array], { type: "image/png" });
+    const url = URL.createObjectURL(blob);
+
+    const card = document.createElement("div");
+    card.className = "image-card";
+    card.innerHTML = `
+        <img src="${url}" alt="${filename}">
+        <div class="filename">${filename}</div>
+    `;
+    imagesDiv.prepend(card);
+
+    delete buffers[image_id];
+    delete expectedCounts[image_id];
+    delete filenames[image_id];
+}
+</script>
+</body>
+</html>
