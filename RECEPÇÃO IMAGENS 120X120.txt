@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard MQTT - IFG</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body {
+    background-color: #111;
+    color: #eee;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    padding: 20px;
+  }
+  h1 {
+    color: #00e0ff;
+  }
+  #status { margin-bottom: 20px; color: #0f0; }
+  #sensor {
+    background-color: #222;
+    border-radius: 10px;
+    padding: 15px;
+    width: 300px;
+    margin: 10px auto;
+  }
+  .label { color: #aaa; }
+  #images {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 15px;
+  }
+  .image-card {
+    background-color: #222;
+    border-radius: 10px;
+    padding: 10px;
+    width: 140px;
+  }
+  .image-card img {
+    width: 120px;
+    height: 120px;
+    border-radius: 5px;
+  }
+  canvas { max-width: 700px; margin-top: 30px; }
+</style>
+</head>
+<body>
+  <h1>??? Dashboard MQTT - IFG</h1>
+  <div id="status">Conectando ao broker...</div>
+
+  <div id="sensor">
+    <div class="label">Temperatura atual:</div>
+    <div id="temp" style="font-size: 22px;">-- °C</div>
+    <div class="label">Umidade atual:</div>
+    <div id="umid" style="font-size: 22px;">-- %</div>
+  </div>
+
+  <canvas id="chart"></canvas>
+
+  <h2>Imagens recebidas</h2>
+  <div id="images"></div>
+
+<script>
+const brokerUrl = "wss://test.mosquitto.org:8081/mqtt";
+const topicImages = "ifg1/imagens";
+const topicSensor = "ifg/sensores/temperatura_umidade";
+
+const client = mqtt.connect(brokerUrl);
+const statusEl = document.getElementById("status");
+const tempEl = document.getElementById("temp");
+const umidEl = document.getElementById("umid");
+const imagesDiv = document.getElementById("images");
+
+// buffers das imagens
+const buffers = {};
+const expectedCounts = {};
+const filenames = {};
+
+// dados do gráfico
+const labels = [];
+const tempData = [];
+const umidData = [];
+
+// gráfico Chart.js
+const ctx = document.getElementById("chart").getContext("2d");
+const chart = new Chart(ctx, {
+  type: "line",
+  data: {
+    labels: labels,
+    datasets: [
+      { label: "Temperatura (°C)", data: tempData, borderWidth: 2, fill: false },
+      { label: "Umidade (%)", data: umidData, borderWidth: 2, fill: false }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: "#fff" } } },
+    scales: {
+      x: { ticks: { color: "#aaa" } },
+      y: { ticks: { color: "#aaa" } }
+    }
+  }
+});
+
+client.on("connect", () => {
+  statusEl.textContent = "? Conectado ao broker MQTT";
+  client.subscribe(topicImages, { qos: 1 });
+  client.subscribe(topicSensor, { qos: 1 });
+  console.log("Inscrito em:", topicImages, topicSensor);
+});
+
+client.on("message", (topic, message) => {
+  try {
+    const data = JSON.parse(message.toString());
+
+    if (topic === topicImages) {
+      const { image_id, seq, total, filename, data_b64 } = data;
+      if (!buffers[image_id]) {
+        buffers[image_id] = {};
+        expectedCounts[image_id] = total;
+        filenames[image_id] = filename;
+      }
+      buffers[image_id][seq] = data_b64;
+      if (Object.keys(buffers[image_id]).length === total) {
+        reconstructImage(image_id);
+      }
+    }
+
+    if (topic === topicSensor) {
+      const { temperatura, umidade, timestamp } = data;
+      tempEl.textContent = `${temperatura.toFixed(1)} °C`;
+      umidEl.textContent = `${umidade.toFixed(1)} %`;
+
+      // atualizar gráfico
+      const timeLabel = new Date(timestamp * 1000).toLocaleTimeString();
+      labels.push(timeLabel);
+      tempData.push(temperatura);
+      umidData.push(umidade);
+      if (labels.length > 20) { // manter últimas 20 leituras
+        labels.shift();
+        tempData.shift();
+        umidData.shift();
+      }
+      chart.update();
+    }
+  } catch (err) {
+    console.error("Erro:", err);
+  }
+});
+
+function reconstructImage(image_id) {
+  const total = expectedCounts[image_id];
+  const chunks = buffers[image_id];
+  const filename = filenames[image_id] || `${image_id}.png`;
+
+  const fullBase64 = Object.keys(chunks)
+    .sort((a, b) => a - b)
+    .map(k => chunks[k])
+    .join("");
+
+  const binary = atob(fullBase64);
+  const array = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+
+  const blob = new Blob([array], { type: "image/png" });
+  const url = URL.createObjectURL(blob);
+
+  const card = document.createElement("div");
+  card.className = "image-card";
+  card.innerHTML = `
+    <img src="${url}" alt="${filename}">
+    <div class="filename">${filename}</div>
+  `;
+  imagesDiv.prepend(card);
+
+  delete buffers[image_id];
+  delete expectedCounts[image_id];
+  delete filenames[image_id];
+}
+</script>
+</body>
+</html>
