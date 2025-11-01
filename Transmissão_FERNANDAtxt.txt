@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+transmissor.py
+- Converte imagens em 120x120 px preto e branco e envia via MQTT
+- Envia também dados simulados de temperatura e umidade
+"""
+
+import os
+import time
+import json
+import base64
+import random
+from PIL import Image
+import paho.mqtt.client as mqtt
+
+# --- CONFIGURAÇÕES DO MQTT ---
+BROKER_HOST = "test.mosquitto.org"
+BROKER_PORT = 1883
+TOPIC_IMAGENS = "ifg1/imagens"
+TOPIC_SENSOR = "ifg/sensores/temperatura_umidade"
+QOS = 1
+
+# --- CONFIGURAÇÕES DE IMAGENS ---
+IMAGES_DIR = r"C:\Users\fernanda.silva\OneDrive\Área de Trabalho\galinha_30_aug_keras"
+CHUNK_BYTES = 16 * 1024
+SLEEP_AFTER_SEND = 0.05
+TARGET_SIZE = (120, 120)
+GRAYSCALE_MODE = "L"
+
+def process_image_to_bw_120x120(image_path):
+    """Converte imagem para 120x120 px em preto e branco"""
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert('RGB')
+            img_resized = img.resize(TARGET_SIZE, Image.Resampling.LANCZOS)
+            img_bw = img_resized.convert(GRAYSCALE_MODE)
+            from io import BytesIO
+            buffer = BytesIO()
+            img_bw.save(buffer, format="PNG", optimize=True)
+            return buffer.getvalue()
+    except Exception as e:
+        print(f"Erro ao processar imagem {image_path}: {e}")
+        return None
+
+def file_to_chunks(data_bytes, chunk_size):
+    return [data_bytes[i:i+chunk_size] for i in range(0, len(data_bytes), chunk_size)]
+
+def on_connect(client, userdata, flags, rc):
+    print("[MQTT] Conectado!" if rc == 0 else f"[MQTT] Falha na conexão (rc={rc})")
+
+def main():
+    if not os.path.exists(IMAGES_DIR):
+        print(f"❌ O diretório {IMAGES_DIR} não existe!")
+        return
+
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.connect(BROKER_HOST, BROKER_PORT, keepalive=60)
+    client.loop_start()
+
+    # Lista apenas arquivos de imagem
+    variations = [
+        os.path.join(IMAGES_DIR, f)
+        for f in sorted(os.listdir(IMAGES_DIR))
+        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))
+    ]
+
+    if not variations:
+        print(f"⚠️ Nenhuma imagem encontrada em {IMAGES_DIR}")
+        return
+
+    print(f"📸 {len(variations)} imagens encontradas. Iniciando transmissão...\n")
+
+    for idx, original_path in enumerate(variations, start=1):
+        image_id = f"img{idx:03d}"
+        original_filename = os.path.basename(original_path)
+        processed_bytes = process_image_to_bw_120x120(original_path)
+        if processed_bytes is None:
+            continue
+
+        chunks = file_to_chunks(processed_bytes, CHUNK_BYTES)
+        total = len(chunks)
+        processed_filename = os.path.splitext(original_filename)[0] + "_bw_120x120.png"
+
+        for seq, block in enumerate(chunks, start=1):
+            payload = {
+                "image_id": image_id,
+                "filename": processed_filename,
+                "seq": seq,
+                "total": total,
+                "timestamp": time.time(),
+                "data_b64": base64.b64encode(block).decode("ascii"),
+                "resolution": "120x120",
+                "color_mode": "grayscale"
+            }
+            client.publish(TOPIC_IMAGENS, json.dumps(payload), qos=QOS)
+            time.sleep(SLEEP_AFTER_SEND)
+
+        # Simular dados de sensores a cada imagem
+        temperatura = round(random.uniform(20.0, 30.0), 2)
+        umidade = round(random.uniform(40.0, 80.0), 2)
+        sensor_data = {
+            "timestamp": time.time(),
+            "temperatura": temperatura,
+            "umidade": umidade
+        }
+        client.publish(TOPIC_SENSOR, json.dumps(sensor_data), qos=QOS)
+        print(f"✅ Imagem {image_id} enviada | Sensor: {temperatura}°C, {umidade}%")
+
+    client.loop_stop()
+    client.disconnect()
+    print("\n🎉 Transmissão finalizada com sucesso!")
+
+if __name__ == "__main__":
+    main()
+
+
